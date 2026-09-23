@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Face audit · data</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<nav id="steps"></nav>
+<div class="page"><div class="narrow">
+  <h1>Get the data</h1>
+  <p class="help">Immich's API doesn't expose face embeddings; they are read from a database backup. Only faces,
+    embeddings and people are kept; users and credentials in the backup are skipped. References are built right after.</p>
+
+  <div id="current"></div>
+
+  <div class="card">
+    <h2>Latest backup from Immich</h2>
+    <p class="help" id="latestHelp">Streams the newest nightly backup straight from the server; nothing is saved to disk.</p>
+    <button id="latest" class="primary">Download &amp; extract</button>
+  </div>
+
+  <div class="card">
+    <h2>…or a backup file on this machine</h2>
+    <div class="row"><input id="path" type="text" placeholder="/path/to/immich-db-backup-20260101T020000-v3.2.0-pg14.19.sql.gz" style="flex:1">
+      <button id="file">Extract</button></div>
+  </div>
+
+  <div class="card" id="jobCard" hidden><h2 id="jobTitle"></h2><div id="job"></div><div id="after" class="row" style="margin-top:8px"></div></div>
+
+  <div class="card" id="rebuildCard" hidden>
+    <h2>References</h2>
+    <p class="help">Rebuild the reference faces without re-extracting, e.g. after adding birth dates in Immich
+      (re-extract to pick those up) or if the build was interrupted.</p>
+    <button id="rebuild">Rebuild references</button>
+  </div>
+</div></div>
+<script src="/static/app.js"></script>
+<script>
+const { el, get, post, steps, runJob, follow, jobPanel } = FA;
+const fmt = n => n == null ? "—" : Number(n).toLocaleString();
+
+async function refresh() {
+  const s = await steps("data");
+  const cur = document.getElementById("current"); cur.replaceChildren();
+  if (s.data) {
+    const c = el("div", "card"), st = el("div", "stats");
+    const d = s.data, b = s.references || {};
+    [["faces", d.faces], ["named people", d.named], ["unassigned faces", d.unassigned], ["references", b.references]]
+      .forEach(([k, v]) => { const x = el("div"); x.append(el("b", null, fmt(v)), el("span", null, k)); st.append(x); });
+    c.append(el("h2", null, "Current data"), el("div", "help", `from ${d.backup || "?"}`), st);
+    if (s.referencesStale) c.append(el("div", "banner", "References are older than the data: rebuild them."));
+    const go = el("button", "primary", "Next: validate references →"); go.onclick = () => location.href = "/references";
+    if (s.references) c.append(go);
+    cur.append(c);
+  }
+  document.getElementById("latest").disabled = !s.connected;
+  document.getElementById("latestHelp").textContent = s.backupKey
+    ? "Streams the newest nightly backup straight from the server; nothing is saved to disk."
+    : "Needs a backup key (step 1). Without one, this tries your main key, which usually lacks the permission.";
+  document.getElementById("rebuildCard").hidden = !s.data;
+  if (s.job && s.job.state === "running" && ["extract", "baseline"].includes(s.job.kind)) watch(s.job.kind);
+}
+
+async function watch(kind, start) {
+  const card = document.getElementById("jobCard"); card.hidden = false;
+  document.getElementById("jobTitle").textContent = kind === "extract" ? "Extracting…" : "Building references…";
+  document.getElementById("after").replaceChildren();
+  const update = jobPanel(document.getElementById("job"));
+  document.querySelectorAll("button").forEach(b => b.disabled = true);
+  try {
+    const j = start ? await runJob(kind, start, update) : await follow(update);
+    document.getElementById("jobTitle").textContent = j.state === "done" ? "Done" : "Failed";
+    if (j.state === "done") {
+      const b = el("button", "primary", "Next: validate references →"); b.onclick = () => location.href = "/references";
+      document.getElementById("after").append(b);
+    }
+  } catch (e) { document.getElementById("jobTitle").textContent = "⚠ " + e.message; }
+  document.querySelectorAll("button").forEach(b => b.disabled = false);
+  refresh();
+}
+
+document.getElementById("latest").onclick = () => watch("extract", { source: "latest" });
+document.getElementById("file").onclick = () => watch("extract", { source: "file", path: document.getElementById("path").value });
+document.getElementById("rebuild").onclick = () => watch("baseline", {});
+refresh();
+</script>
+</body>
+</html>

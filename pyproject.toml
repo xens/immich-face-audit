@@ -21,4 +21,4 @@ immich-face-audit = "immich_face_audit.cli:main"
 packages = ["immich_face_audit", "immich_face_audit.static"]
 
 [tool.setuptools.package-data]
-"immich_face_audit.static" = ["*.html"]
+"immich_face_audit.static" = ["*.html", "*.css", "*.js"]

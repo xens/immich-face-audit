@@ -5,23 +5,20 @@ Find and fix misassigned faces across a whole [Immich](https://immich.app/) libr
 
 It uses the face embeddings Immich has already computed, so **nothing is re-scanned** and no ML job is
 queued. It builds a per-person, per-period set of reference faces, lets you validate it, scores every
-face in the library against it, and walks you through the discrepancies in a local web app. Nothing is
-written to Immich until you run `apply --write`, and everything it writes can be undone.
+face in the library against it, and walks you through the discrepancies. Everything happens in a local web
+app, from connecting to Immich to applying the fixes. Nothing is written to Immich until you confirm it on the
+last step, and everything it writes can be undone.
 
 On a 117k-face library it extracts in about 30 s, builds references in about 5 s and scores every face in about 15 s.
 
 ```mermaid
 flowchart TD
-    DB[("Immich<br/>nightly DB backup")] -->|"extract --latest-backup<br/>(or extract FILE)"| X["faces · embeddings · people"]
-    API(["Immich API"]) -.->|"live names, birth dates"| X
-    X -->|baseline| R["reference faces per person × 3-year window"]
-    subgraph app ["review — local web app"]
+    subgraph app ["immich-face-audit — local web app"]
         direction LR
-        V{{"1 · validate<br/>references"}} -->|"Compute flags"| F["flagged faces"] --> D{{"2 · decide<br/>y / n / u"}}
+        C{{"1 · Connect<br/>URL + API keys"}} --> D["2 · Data<br/>backup → faces,<br/>embeddings, people"] --> R{{"3 · References<br/>validate"}} --> F{{"4 · Flags<br/>decide y / n / u"}} --> A["5 · Apply<br/>preview, confirm"]
     end
-    R --> app
-    app -->|"apply (dry run)<br/>then apply --write"| W(["Immich API<br/>faces reassigned, logged"])
-    W -.->|"undo --write"| W
+    DB[("Immich<br/>nightly DB backup")] -->|"streamed via the API<br/>(or a local file)"| app
+    app -->|"reassign / remove faces<br/>checked, logged, undoable"| W(["Immich API"])
 ```
 
 ## Why periods matter
@@ -35,21 +32,37 @@ This tool only compares a face with references **from the same period** (±3 yea
 people who were **born by then** (when Immich has a birth date for them). A 2-year-old in a 2020 photo is
 compared with the 2-year-old cousin of 2020, not with an older sibling's baby photos from 2014.
 
-## Workflow
+## Quick start
 
 ```
-immich-face-audit extract --latest-backup               # or: extract immich-db-backup-XXXX.sql.gz
-immich-face-audit baseline                               # propose reference faces
-immich-face-audit review                                 # web app: validate, compute flags, decide
-immich-face-audit apply                                  # dry run
-immich-face-audit apply --write --limit 1                # try one, check it in Immich
-immich-face-audit apply --write                          # the rest
-immich-face-audit undo --write                           # if needed
+pipx install git+https://github.com/xens/immich-face-audit
+immich-face-audit --workdir ~/face-audit
 ```
 
-`immich-face-audit run --latest-backup` (or `run DUMP`) chains extract, baseline and review.
+A browser tab opens on `http://127.0.0.1:8091`. Follow the five steps along the top:
 
-### 1. Extract
+1. **Connect**: your Immich URL and API keys. Each key is checked against the permissions it needs.
+2. **Data**: download the latest database backup from Immich (or point to a backup file). References are built right after.
+3. **References**: glance at each person's reference faces and reject any wrong one.
+4. **Flags**: *Compute flags*, then go through the flagged faces with `y` / `n` / `u`.
+5. **Apply**: preview what will change, try one, then apply the rest. *Undo all* is on the same page.
+
+The same steps are available from the command line, for scripting:
+
+```
+immich-face-audit extract --latest-backup     # or: extract immich-db-backup-XXXX.sql.gz
+immich-face-audit baseline
+immich-face-audit score
+immich-face-audit apply                       # dry run
+immich-face-audit apply --write
+immich-face-audit undo --write
+```
+
+The sections below explain what each step does.
+
+## How each step works
+
+### Data: extract
 
 The face embeddings are not available through Immich's API; they only exist in the database. But
 Immich writes a nightly database backup (`UPLOAD_LOCATION/backups/immich-db-backup-*.sql.gz`, see
@@ -70,7 +83,7 @@ the live API, so edits you make in Immich after the dump are picked up.
 **Add birth dates in Immich for the people who matter.** They switch on the "photographed before
 being born" check, and they keep children out of comparisons for years before they existed.
 
-### 2. Baseline
+### Data: building the references
 
 For each named person and each 3-year window, the faces that agree most with each other become that
 period's **references** (up to 40 per window, skipping near-duplicate burst shots). Faces that break a
@@ -78,9 +91,9 @@ hard rule are excluded from the start: dated before the birth date, or the same 
 one photo. A second pass removes references that look more like someone else's references from the
 same period.
 
-### 3. Review
+### References and flags
 
-`review` opens a local web app (127.0.0.1 only) with two tabs:
+In the app (127.0.0.1 only):
 
 - **References**: every proposed reference, per person and period. People who most resemble someone else
   come first, and inside a period the least consistent faces are at the end of the row. Click to reject a bad
@@ -100,9 +113,10 @@ same period.
 
 Everything you decide is saved as you go. You can stop and resume at any time.
 
-### 4. Apply
+### Apply
 
-`apply` is a dry run unless you pass `--write`. For each decision it:
+The Apply page shows what will change, with a crop of each face, before anything is written. From the
+command line, `apply` is a dry run unless you pass `--write`. For each decision it:
 
 1. reads the face back from Immich and **skips it if it has changed since you reviewed it**,
 2. reassigns it (`accept`), or moves it to a new unnamed person (`remove`, which is what Immich's own
@@ -120,9 +134,7 @@ full history. A second audit also finds more: every face you reassigned becomes 
 unnamed faces that used to be ambiguous now clearly match someone.
 
 ```
-immich-face-audit --workdir ~/face-audit extract --latest-backup
-immich-face-audit --workdir ~/face-audit baseline
-immich-face-audit --workdir ~/face-audit review
+immich-face-audit --workdir ~/face-audit
 ```
 
 ## Install
@@ -138,7 +150,8 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 > **Use numpy from PyPI, not a distro package.** Some distro builds link the reference BLAS, which makes
 > the scoring about 100× slower (minutes instead of seconds). A plain `pip install` brings OpenBLAS.
 
-Configuration goes in environment variables or a `.env` file, in the current directory or in the work directory:
+The app's Connect step writes the configuration for you, to `<workdir>/.env` (owner-only). You can also set it
+yourself, in environment variables or a `.env` file in the current directory or the work directory:
 
 ```
 IMMICH_URL=http://192.168.1.10:2283
@@ -165,9 +178,14 @@ Keep it separate from the everyday key, create it only when you need it, and rev
 ## Privacy
 
 The work directory (`face-audit-data/` by default, or `--workdir`) contains **face embeddings, which are
-biometric data**, plus names and birth dates. It stays on your machine: `.gitignore` excludes it, as well
-as `*.sql.gz`, `*.npy`, `*.tsv` and `.env`. The review app binds to 127.0.0.1 and keeps the API key
-server-side. The only thing it relays to Immich is thumbnail requests.
+biometric data**, plus names, birth dates and your API keys. It stays on your machine: `.gitignore` excludes
+it, as well as `*.sql.gz`, `*.npy`, `*.tsv` and `.env`.
+
+The web app binds to 127.0.0.1 and keeps the API keys server-side: they are never sent back to the browser.
+Because it can write to Immich, it only answers requests addressed to `127.0.0.1:<port>` or
+`localhost:<port>`, which blocks DNS-rebinding tricks. It also requires a custom header on every POST, which
+stops another website open in your browser from triggering an apply. The only Immich call it relays for the
+browser is thumbnail requests.
 
 ## Tuning
 

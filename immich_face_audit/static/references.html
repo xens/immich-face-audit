@@ -4,21 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Face audit · references</title>
+<link rel="stylesheet" href="/static/app.css">
 <style>
-  :root { --bg:#f6f5f2; --panel:#fff; --ink:#1d1d1b; --muted:#6b6a66; --line:#e3e1dc; --accent:#2f6fdb; --bad:#d23c3c; --ok:#2e8b57; --sel:#e9eefb; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#151515; --panel:#1e1e1e; --ink:#ecebe8; --muted:#9a9892; --line:#2e2e2e; --accent:#6d9cf0; --bad:#ef6b6b; --ok:#58b983; --sel:#22304a; }
-  }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui, sans-serif; height:100vh; display:flex; flex-direction:column; }
-  nav { display:flex; align-items:center; gap:4px; padding:8px 12px; border-bottom:1px solid var(--line); background:var(--panel); }
-  nav a { padding:5px 12px; border-radius:6px; color:var(--ink); text-decoration:none; }
-  nav a.on { background:var(--sel); font-weight:600; }
-  nav .sp { flex:1; }
   .wrap { flex:1; display:grid; grid-template-columns:250px 1fr; min-height:0; }
   aside { border-right:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; min-height:0; }
   aside header { padding:12px; border-bottom:1px solid var(--line); }
-  aside input { width:100%; padding:6px 8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); }
   #status { font-size:12px; color:var(--muted); margin-top:6px; }
   #people { overflow-y:auto; flex:1; }
   .p { padding:6px 12px; cursor:pointer; display:flex; justify-content:space-between; gap:8px; border-left:3px solid transparent; }
@@ -31,53 +21,45 @@
   main { overflow-y:auto; padding:16px 20px 60px; min-width:0; }
   main > header { display:flex; align-items:baseline; gap:16px; flex-wrap:wrap; margin-bottom:8px; }
   h1 { font-size:22px; margin:0; }
-  .help { color:var(--muted); font-size:12px; }
-  button { font:inherit; padding:5px 12px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--ink); cursor:pointer; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  button:disabled { opacity:.5; cursor:default; }
   section { margin-top:18px; }
   section h2 { font-size:13px; font-weight:600; margin:0 0 6px; color:var(--muted); font-variant-numeric:tabular-nums; }
   .grid { display:flex; flex-wrap:wrap; gap:4px; }
-  .f { width:96px; height:96px; position:relative; overflow:hidden; border-radius:6px; background:var(--line); cursor:pointer; }
-  .f img { position:absolute; max-width:none; }
-  .f.x { outline:3px solid var(--bad); outline-offset:-3px; }
-  .f.x img { opacity:.35; }
-  .f.x::after { content:"✕"; position:absolute; inset:0; display:grid; place-items:center; color:var(--bad); font-size:40px; font-weight:700; }
-  .f .d { position:absolute; left:0; right:0; bottom:0; font-size:10px; padding:1px 4px; color:#fff; background:linear-gradient(transparent, rgba(0,0,0,.7)); }
-  .empty { padding:40px; color:var(--muted); }
+  .grid .f { cursor:pointer; }
+  .grid .f.x { outline:3px solid var(--bad); outline-offset:-3px; }
+  .grid .f.x img { opacity:.35; }
+  .grid .f.x::after { content:"✕"; position:absolute; inset:0; display:grid; place-items:center; color:var(--bad); font-size:40px; font-weight:700; }
+  .grid .f .d { position:absolute; left:0; right:0; bottom:0; font-size:10px; padding:1px 4px; color:#fff; background:linear-gradient(transparent, rgba(0,0,0,.7)); }
+  .bar { display:flex; align-items:center; gap:10px; padding:8px 20px; border-bottom:1px solid var(--line); background:var(--panel); }
+  .bar .sp { flex:1; }
 </style>
 </head>
 <body>
-<nav>
-  <a href="/" class="on">1 · References</a>
-  <a href="/flags">2 · Flags</a>
+<nav id="steps"></nav>
+<div class="bar">
+  <span class="help">Reject any face that isn't the person. People who look most like someone else come first; in each period the least consistent faces are last.
+    click = reject / restore · shift-click = open in Immich · j / k = next / previous person</span>
   <span class="sp"></span>
   <span id="scoreMsg" class="help"></span>
   <button id="score" class="primary">Compute flags →</button>
-</nav>
+</div>
 <div class="wrap">
 <aside>
   <header>
-    <input id="q" placeholder="Filter…" autocomplete="off">
+    <input id="q" type="text" placeholder="Filter…" autocomplete="off">
     <div id="status">loading…</div>
   </header>
   <div id="people"></div>
 </aside>
 <main>
-  <header>
-    <h1 id="who"></h1>
-    <span class="help">click = reject / restore · shift-click = open in Immich · j / k = next / previous person.
-      People who look most like someone else come first; within a period, least consistent faces are last.</span>
-    <button id="done"></button>
-  </header>
+  <header><h1 id="who"></h1><button id="done"></button></header>
   <div id="windows"></div>
 </main>
 </div>
+<script src="/static/app.js"></script>
 <script>
-const D = 96, THUMB = 250;
+const { el, get, post, steps, runJob, crop: faceCrop } = FA;
 let PEOPLE = [], state = { rejected: {}, reviewed: {} }, cur = 0, immich = "", saveTimer = null;
 const $ = s => document.querySelector(s);
-const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
 
 function counts(p) {
   let n = 0, x = 0;
@@ -103,15 +85,11 @@ function renderList() {
 }
 
 function crop(r) {
-  const [fid, aid, W, H, x1, y1, x2, y2, date, score] = r;
-  const box = el("div", "f" + (state.rejected[fid] ? " x" : ""));
-  const side = Math.max(x2 - x1, y2 - y1) * 1.5, cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, s = D / side;
-  const size = (x2 - x1) / W * THUMB * W / Math.max(W, H) < 60 ? "preview" : "thumbnail";
-  const img = new Image(); img.loading = "lazy";
-  img.src = `/api/assets/${aid}/thumbnail?size=${size}`;
-  Object.assign(img.style, { width: W * s + "px", height: H * s + "px", left: -(cx - side / 2) * s + "px", top: -(cy - side / 2) * s + "px" });
+  const [fid, aid, , , , , , , date, score] = r;
+  const box = faceCrop(r, 96);
+  if (state.rejected[fid]) box.classList.add("x");
   box.title = `${date} · consistency ${score.toFixed(3)}`;
-  box.append(img, el("span", "d", date.slice(0, 7)));
+  box.append(el("span", "d", date.slice(0, 7)));
   box.onclick = e => {
     if (e.shiftKey) { window.open(`${immich}/photos/${aid}`, "_blank"); return; }
     if (state.rejected[fid]) delete state.rejected[fid]; else state.rejected[fid] = 1;
@@ -138,12 +116,11 @@ function show(i) {
   renderList();
 }
 
-function save() {
+function save(now) {
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(async () => {
-    const r = await fetch("/audit/state/rejections", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(state) });
-    if (!r.ok) $("#status").textContent = "⚠ save failed";
-  }, 300);
+  const doSave = () => post("/audit/state/rejections", state).catch(e => $("#status").textContent = "⚠ save failed: " + e.message);
+  if (now) return doSave();
+  saveTimer = setTimeout(doSave, 300);
 }
 
 $("#done").onclick = () => {
@@ -152,13 +129,13 @@ $("#done").onclick = () => {
   save(); show(state.reviewed[id] ? cur + 1 : cur);
 };
 $("#score").onclick = async () => {
-  const b = $("#score"); b.disabled = true; $("#scoreMsg").textContent = "scoring every face…";
-  clearTimeout(saveTimer);
-  await fetch("/audit/state/rejections", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(state) });
-  const r = await fetch("/audit/score", { method: "POST" });
-  const d = await r.json();
-  if (r.ok) location.href = "/flags";
-  else { $("#scoreMsg").textContent = "⚠ " + d.error; b.disabled = false; }
+  const b = $("#score"); b.disabled = true;
+  try {
+    await save(true);
+    const j = await runJob("score", {}, j => $("#scoreMsg").textContent = "scoring every face… " + (j.log.at(-1) || ""));
+    if (j.state === "done") location.href = "/flags";
+    else { $("#scoreMsg").textContent = "⚠ " + j.error; b.disabled = false; }
+  } catch (e) { $("#scoreMsg").textContent = "⚠ " + e.message; b.disabled = false; }
 };
 $("#q").oninput = renderList;
 document.addEventListener("keydown", e => {
@@ -166,12 +143,19 @@ document.addEventListener("keydown", e => {
   if (e.key === "j") show(cur + 1);
   if (e.key === "k") show(cur - 1);
 });
+window.addEventListener("beforeunload", () => { if (saveTimer) save(true); });
 
 (async () => {
-  immich = (await (await fetch("/audit/config")).json()).immich;
-  state = Object.assign(state, await (await fetch("/audit/state/rejections")).json());
-  PEOPLE = await (await fetch("/audit/references")).json();
-  if (!PEOPLE.length) { $("#windows").replaceChildren(el("div", "empty", "No references: run `immich-face-audit baseline` first.")); return; }
+  const s = await steps("references");
+  immich = (await get("/audit/config")).immich;
+  state = Object.assign(state, await get("/audit/state/rejections"));
+  PEOPLE = await get("/audit/references");
+  if (!PEOPLE.length) {
+    $("#windows").replaceChildren(el("div", "empty", s.data ? "No references yet: build them in step 2." : "Get the data first (step 2)."));
+    $("#score").disabled = true;
+    return;
+  }
+  if (s.referencesStale) $("#windows").before(el("div", "banner", "These references are older than the data. Rebuild them in step 2."));
   show(0);
 })();
 </script>

@@ -9,6 +9,7 @@ undone.
 """
 from __future__ import annotations
 
+import csv
 import json
 import time
 
@@ -47,11 +48,44 @@ def plan(wd: Workdir, undo: bool) -> list[dict]:
     return out
 
 
+def preview(wd: Workdir) -> dict:
+    """What `apply` would do, judged against the latest extracted data (no API
+    calls): pending, already applied (e.g. from another folder), or changed in
+    Immich since the review. `apply` still re-checks every face live."""
+    current: dict[str, str] = {}
+    geometry: dict[str, list] = {}
+    if wd.faces.exists():
+        with open(wd.faces) as f:
+            for r in csv.DictReader(f, delimiter="\t"):
+                current[r["face_id"]] = r["person_id"]
+                geometry[r["face_id"]] = [r["face_id"], r["asset_id"], int(r["image_w"]), int(r["image_h"]),
+                                          int(r["x1"]), int(r["y1"]), int(r["x2"]), int(r["y2"])]
+    groups: dict[str, list] = {"pending": [], "done": [], "changed": [], "unknown": []}
+    for t in plan(wd, undo=False):
+        cur = current.get(t["face"])
+        if cur is None:
+            state = "unknown"  # not in the extracted data: deleted, or data older than the decision
+        elif t["action"] == "accept" and cur == t["target"]:
+            state = "done"
+        elif cur != t["expected"]:
+            state = "changed"
+        else:
+            state = "pending"
+        groups[state].append({k: t.get(k) for k in ("face", "asset", "action", "fromName", "toName", "reason")}
+                             | {"geometry": geometry.get(t["face"])})
+    live = _live(wd)
+    return {**groups, "undoable": len(live),
+            "recent": [{k: e.get(k) for k in ("face", "asset", "fromName", "toName", "reason", "t")}
+                       | {"geometry": geometry.get(e["face"])}
+                       for e in sorted(live.values(), key=lambda e: -e["t"])[:60]]}
+
+
 def run(wd: Workdir, immich: Immich, undo: bool = False, write: bool = False,
-        limit: int = 0, faces: list[str] | None = None, log=print) -> dict:
+        limit: int = 0, faces: list[str] | None = None, log=print, progress=None) -> dict:
     todo = plan(wd, undo)
-    if faces:
-        todo = [t for t in todo if t["face"] in faces]
+    if faces is not None:  # an empty selection means nothing, not everything
+        wanted = set(faces)
+        todo = [t for t in todo if t["face"] in wanted]
     if limit:
         todo = todo[:limit]
     op = "undo" if undo else "apply"
@@ -59,6 +93,8 @@ def run(wd: Workdir, immich: Immich, undo: bool = False, write: bool = False,
 
     done = skipped = failed = 0
     for n, t in enumerate(todo, 1):
+        if progress:
+            progress(n, len(todo))
         face, asset, target = t["face"], t["asset"], t["target"]
         try:
             cur = immich.current_person(asset, face)

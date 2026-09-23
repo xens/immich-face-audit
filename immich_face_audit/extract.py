@@ -55,21 +55,41 @@ def _visible_asset(r: dict) -> bool:
     return r.get("isVisible", "t") != "f"
 
 
-def extract(dump: Path, wd: Workdir, log=print) -> dict:
+class _Counting(io.RawIOBase):
+    """Byte counter around a binary stream, for progress reporting."""
+
+    def __init__(self, raw, total: int, progress) -> None:
+        self.raw, self.total, self.progress, self.done = raw, total, progress, 0
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, b) -> int:
+        n = self.raw.readinto(b)
+        self.done += n or 0
+        if self.progress:
+            self.progress(self.done, self.total)
+        return n
+
+
+def _text(raw, total: int, gzipped: bool, progress):
+    stream = io.BufferedReader(_Counting(raw, total, progress), 1 << 20)
+    return io.TextIOWrapper(gzip.GzipFile(fileobj=stream) if gzipped else stream, encoding="utf-8")
+
+
+def extract(dump: Path, wd: Workdir, log=print, progress=None) -> dict:
     """Extract from a local backup file (.sql.gz or plain .sql)."""
-    opener = gzip.open if dump.suffix == ".gz" else open
-    with opener(dump, "rt", encoding="utf-8") as fh:
-        return extract_lines(fh, wd, log)
+    with open(dump, "rb") as raw, _text(raw, dump.stat().st_size, dump.suffix == ".gz", progress) as fh:
+        return {"backup": dump.name, **extract_lines(fh, wd, log)}
 
 
-def extract_from_immich(immich: Immich, wd: Workdir, log=print) -> dict:
+def extract_from_immich(immich: Immich, wd: Workdir, log=print, progress=None) -> dict:
     """Stream the newest server-side backup straight into the extractor;
     nothing is written to disk except the extracted tables."""
     b = immich.latest_backup()
     log(f"downloading {b['filename']} ({b['filesize'] / 2**20:.0f} MB) from Immich ...")
-    with immich.download_backup(b["filename"]) as resp:
-        with io.TextIOWrapper(gzip.GzipFile(fileobj=resp), encoding="utf-8") as fh:
-            stats = extract_lines(fh, wd, log)
+    with immich.download_backup(b["filename"]) as resp, _text(resp, b["filesize"], True, progress) as fh:
+        stats = extract_lines(fh, wd, log)
     return {"backup": b["filename"], **stats}
 
 

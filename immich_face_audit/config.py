@@ -30,6 +30,13 @@ class Workdir:
     flags = property(lambda s: s.root / "flags.json")
     decisions = property(lambda s: s.root / "decisions.json")
     apply_log = property(lambda s: s.root / "apply_log.jsonl")
+    meta = property(lambda s: s.root / "meta.json")  # when/how each step last ran
+    env = property(lambda s: s.root / ".env")
+
+    def update_meta(self, **values) -> None:
+        m = self.read_json(self.meta, {})
+        m.update(values)
+        self.write_json(self.meta, m)
 
     def read_json(self, path: Path, default):
         return json.loads(path.read_text()) if path.exists() else default
@@ -49,6 +56,35 @@ def load_env(*paths: Path) -> None:
             k, sep, v = line.partition("=")
             if sep and not line.lstrip().startswith("#"):
                 os.environ.setdefault(k.strip(), v.strip().strip("'\""))
+
+
+def write_env(path: Path, values: dict[str, str | None]) -> None:
+    """Set (or, with None/"", remove) keys in a .env file, keeping every other
+    line. The file holds API keys, so it is always left owner-only (0600)."""
+    lines = path.read_text().splitlines() if path.exists() else []
+    out, seen = [], set()
+    for line in lines:
+        k = line.partition("=")[0].strip()
+        if k in values and "=" in line and not line.lstrip().startswith("#"):
+            seen.add(k)
+            if values[k]:
+                out.append(f"{k}={values[k]}")
+            continue
+        out.append(line)
+    out += [f"{k}={v}" for k, v in values.items() if v and k not in seen]
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(out) + "\n")
+    os.chmod(path, 0o600)
+
+
+# Permissions each key needs ("all" satisfies anything).
+MAIN_KEY_PERMISSIONS = ["asset.view", "face.read", "face.update", "person.read", "person.create"]
+BACKUP_KEY_PERMISSIONS = ["maintenance", "backup.download"]
+
+
+def missing_permissions(have: list[str], need: list[str]) -> list[str]:
+    return [] if "all" in have else [p for p in need if p not in have]
 
 
 class ImmichError(RuntimeError):
@@ -106,6 +142,10 @@ class Immich:
     def download_backup(self, filename: str):
         """Stream of the gzipped backup. Needs `backup.download`."""
         return self.open_stream(f"/api/admin/database-backups/{urllib.parse.quote(filename)}")
+
+    def key_info(self) -> dict:
+        """Name and permissions of the key in use (needs no permission itself)."""
+        return self.call("GET", "/api/api-keys/me")
 
     def people(self) -> list[dict]:
         out, page = [], 1

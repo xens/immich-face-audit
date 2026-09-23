@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Face audit · connect</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  label { display:block; font-weight:600; margin:14px 0 4px; }
+  table { border-collapse:collapse; margin-top:8px; font-size:13px; }
+  td { padding:3px 12px 3px 0; }
+  .yes { color:var(--ok); font-weight:700; } .no { color:var(--bad); font-weight:700; }
+</style>
+</head>
+<body>
+<nav id="steps"></nav>
+<div class="page"><div class="narrow">
+  <h1>Connect to Immich</h1>
+  <p class="help">Create keys under Immich → Account Settings → API Keys, with only the permissions listed.
+    They are stored in this work folder's <code>.env</code> (readable by you only) and never shown again.</p>
+
+  <div class="card">
+    <label for="url">Immich URL</label>
+    <input id="url" type="url" placeholder="http://192.168.1.10:2283" autocomplete="off">
+
+    <label for="key">API key</label>
+    <input id="key" type="password" autocomplete="off">
+    <div class="help">Permissions: <code>asset.view</code> <code>face.read</code> <code>face.update</code>
+      <code>person.read</code> <code>person.create</code></div>
+    <div id="mainReport"></div>
+
+    <label for="backupKey">Backup key <span class="help">(optional)</span></label>
+    <input id="backupKey" type="password" autocomplete="off">
+    <div class="help">Only to download the database backup in the next step. From an <b>admin</b> account, with
+      <code>maintenance</code> and <code>backup.download</code>. It can download the whole database, including every
+      user's email and password hash: revoke it in Immich once the data is extracted.</div>
+    <div id="backupReport"></div>
+
+    <div class="row" style="margin-top:16px">
+      <button id="save" class="primary">Test &amp; save</button>
+      <button id="forget" hidden>Forget the backup key</button>
+      <span id="msg" class="help"></span>
+    </div>
+  </div>
+  <div id="next"></div>
+</div></div>
+<script src="/static/app.js"></script>
+<script>
+const { el, get, post, steps } = FA;
+
+function report(box, r, input) {
+  box.replaceChildren();
+  input.placeholder = r.set ? "saved — leave empty to keep it" : "";
+  if (!r.set) return;
+  if (r.error) { box.append(el("div", "banner bad", "Immich rejected this key: " + r.error)); return; }
+  const t = el("table");
+  r.need.forEach(p => {
+    const tr = el("tr"), ok = !r.missing.includes(p);
+    tr.append(el("td", ok ? "yes" : "no", ok ? "✓" : "✕"), el("td", null, p));
+    t.append(tr);
+  });
+  box.append(el("div", "help", `Key “${r.name}”` + (r.permissions.includes("all") ? " has all permissions: consider a narrower one." : "")), t);
+  if (r.missing.length) box.append(el("div", "banner bad", "Missing: " + r.missing.join(", ")));
+}
+
+async function show(c) {
+  document.getElementById("url").value = c.url || "";
+  report(document.getElementById("mainReport"), c.main, document.getElementById("key"));
+  report(document.getElementById("backupReport"), c.backup, document.getElementById("backupKey"));
+  document.getElementById("forget").hidden = !c.backup.set;
+  const s = await steps("connect");
+  const next = document.getElementById("next"); next.replaceChildren();
+  if (c.main.ok) {
+    const b = el("button", "primary", s.data ? "Continue → Data" : "Next: get the data →");
+    b.onclick = () => location.href = "/data";
+    next.append(b);
+  }
+  if (c.backup.set && s.data)
+    next.prepend(el("div", "banner", "Data is extracted. Revoke the backup key in Immich now, then press “Forget the backup key”."));
+}
+
+document.getElementById("save").onclick = async () => {
+  const msg = document.getElementById("msg"); msg.textContent = "testing…";
+  try {
+    const c = await post("/audit/connect", { url: document.getElementById("url").value,
+      key: document.getElementById("key").value, backupKey: document.getElementById("backupKey").value });
+    document.getElementById("key").value = document.getElementById("backupKey").value = "";
+    msg.textContent = "saved"; await show(c);
+  } catch (e) { msg.textContent = "⚠ " + e.message; }
+};
+document.getElementById("forget").onclick = async () => {
+  if (!confirm("Remove the backup key from this folder's .env? (Revoke it in Immich too.)")) return;
+  await show(await post("/audit/connect", { forgetBackup: true }));
+};
+(async () => show(await get("/audit/connect")))();
+</script>
+</body>
+</html>

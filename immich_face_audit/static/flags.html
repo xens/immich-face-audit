@@ -4,17 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Face audit · flags</title>
+<link rel="stylesheet" href="/static/app.css">
 <style>
-  :root { --bg:#f6f5f2; --panel:#fff; --ink:#1d1d1b; --muted:#6b6a66; --line:#e3e1dc; --accent:#2f6fdb; --bad:#d23c3c; --ok:#2e8b57; --warn:#b7791f; --sel:#e9eefb; }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#151515; --panel:#1e1e1e; --ink:#ecebe8; --muted:#9a9892; --line:#2e2e2e; --accent:#6d9cf0; --bad:#ef6b6b; --ok:#58b983; --warn:#e0a84a; --sel:#22304a; }
-  }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.4 system-ui, sans-serif; height:100vh; display:flex; flex-direction:column; }
-  nav { display:flex; align-items:center; gap:4px; padding:8px 12px; border-bottom:1px solid var(--line); background:var(--panel); }
-  nav a { padding:5px 12px; border-radius:6px; color:var(--ink); text-decoration:none; }
-  nav a.on { background:var(--sel); font-weight:600; }
-  nav .sp { flex:1; }
   .wrap { flex:1; display:grid; grid-template-columns:280px 1fr; min-height:0; }
   aside { border-right:1px solid var(--line); background:var(--panel); display:flex; flex-direction:column; min-height:0; }
   aside header { padding:12px; border-bottom:1px solid var(--line); }
@@ -29,23 +20,16 @@
   main { overflow-y:auto; padding:16px 20px 60px; min-width:0; }
   main > header { margin-bottom:12px; }
   h1 { font-size:20px; margin:0 0 4px; }
-  .help { color:var(--muted); font-size:12px; }
-  .bar { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
-  button { font:inherit; padding:4px 10px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--ink); cursor:pointer; }
-  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
-  button:disabled { opacity:.5; cursor:default; }
+  .groupbar { display:flex; gap:8px; margin-top:8px; flex-wrap:wrap; }
   #cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(250px, 1fr)); gap:10px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:8px; display:grid; grid-template-columns:128px 1fr; gap:8px; outline:2px solid transparent; }
-  .card.cur { outline-color:var(--accent); }
-  .card.accept { border-color:var(--ok); background:color-mix(in srgb, var(--ok) 10%, var(--panel)); }
-  .card.keep { opacity:.55; }
-  .card.unassign { border-color:var(--warn); background:color-mix(in srgb, var(--warn) 10%, var(--panel)); }
-  .f { position:relative; overflow:hidden; border-radius:6px; background:var(--line); cursor:zoom-in; }
-  .f img { position:absolute; max-width:none; }
-  .main { width:128px; height:128px; }
+  .card2 { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:8px; display:grid; grid-template-columns:128px 1fr; gap:8px; outline:2px solid transparent; }
+  .card2.cur { outline-color:var(--accent); }
+  .card2.accept { border-color:var(--ok); background:color-mix(in srgb, var(--ok) 10%, var(--panel)); }
+  .card2.keep { opacity:.55; }
+  .card2.unassign { border-color:var(--warn); background:color-mix(in srgb, var(--warn) 10%, var(--panel)); }
+  .card2 .f { cursor:zoom-in; }
   .refs { display:flex; flex-direction:column; gap:4px; font-size:11px; }
   .ref { display:grid; grid-template-columns:52px 1fr; gap:6px; align-items:center; }
-  .ref .f { width:52px; height:52px; }
   .ref b { display:block; font-size:12px; }
   .ref .sc { color:var(--muted); font-variant-numeric:tabular-nums; }
   .ref.sug b { color:var(--ok); }
@@ -54,17 +38,20 @@
   .acts button { padding:1px 7px; font-size:12px; }
   .verdict { font-weight:600; }
   .accept .verdict { color:var(--ok); } .unassign .verdict { color:var(--warn); }
-  .empty { padding:40px; color:var(--muted); }
+  .bar { display:flex; align-items:center; gap:10px; padding:8px 20px; border-bottom:1px solid var(--line); background:var(--panel); }
+  .bar .sp { flex:1; }
 </style>
 </head>
 <body>
-<nav>
-  <a href="/">1 · References</a>
-  <a href="/flags" class="on">2 · Flags</a>
+<nav id="steps"></nav>
+<div class="bar">
+  <span class="help"><b>y</b> = give to the suggestion · <b>n</b> = correct, keep · <b>u</b> = remove the person · <b>space</b> = clear ·
+    <b>← →</b> card · <b>j / k</b> group · click a face = open in Immich</span>
   <span class="sp"></span>
   <span id="scoreMsg" class="help"></span>
   <button id="score">Recompute flags</button>
-</nav>
+  <button id="next" class="primary">Next: apply →</button>
+</div>
 <div class="wrap">
 <aside>
   <header><div id="status"></div></header>
@@ -73,11 +60,9 @@
 <main>
   <header>
     <h1 id="title"></h1>
-    <div class="help">Large face = flagged face. Right: a validated reference of each person from the same period.<br>
-      <b>y</b> = give to the suggestion · <b>n</b> = correct, keep · <b>u</b> = remove the person · <b>space</b> = clear ·
-      <b>← →</b> card · <b>j / k</b> group · click a face = open in Immich.
-      Nothing changes in Immich until you run <code>immich-face-audit apply --write</code>.</div>
-    <div class="bar">
+    <div class="help">Large face = flagged face. Right: a validated reference of each person from the same period.
+      Nothing changes in Immich until step 5.</div>
+    <div class="groupbar">
       <button id="allAccept">Whole group → suggestion</button>
       <button id="allKeep">Whole group → keep</button>
       <button id="allUnassign">Whole group → remove</button>
@@ -86,29 +71,24 @@
   <div id="cards"></div>
 </main>
 </div>
+<script src="/static/app.js"></script>
 <script>
+const { el, get, post, steps, runJob, crop: faceCrop } = FA;
 const LABEL = { swap: "Wrong person?", "before-birth": "Before birth date", twice: "Tagged twice in one photo",
                 "not-them": "Looks like nobody", suggest: "Unnamed → suggestion" };
 const VERB = { accept: "→ suggestion", keep: "keep", unassign: "remove" };
 let GROUPS = [], dec = {}, cur = 0, card = 0, immich = "", timer = null;
 const $ = s => document.querySelector(s);
-const el = (t, c, x) => { const e = document.createElement(t); if (c) e.className = c; if (x != null) e.textContent = x; return e; };
 
-function crop(f, D, cls) {
-  const [fid, aid, W, H, x1, y1, x2, y2] = f;
-  const box = el("div", "f " + cls); box.style.width = box.style.height = D + "px";
-  const side = Math.max(x2 - x1, y2 - y1) * 1.5, cx = (x1 + x2) / 2, cy = (y1 + y2) / 2, s = D / side;
-  const img = new Image(); img.loading = "lazy";
-  img.src = `/api/assets/${aid}/thumbnail?size=${(x2 - x1) / W * 250 * W / Math.max(W, H) < D * 0.6 ? "preview" : "thumbnail"}`;
-  Object.assign(img.style, { width: W * s + "px", height: H * s + "px", left: -(cx - side / 2) * s + "px", top: -(cy - side / 2) * s + "px" });
-  box.append(img);
-  box.onclick = () => window.open(`${immich}/photos/${aid}`, "_blank");
+function crop(f, D) {
+  const box = faceCrop(f, D);
+  box.onclick = () => window.open(`${immich}/photos/${f[1]}`, "_blank");
   return box;
 }
 
 function refRow(r, who, score, sug) {
   const row = el("div", "ref" + (sug ? " sug" : ""));
-  row.append(r ? crop(r, 52, "") : el("div", "f"));
+  row.append(r ? crop(r, 52) : el("div", "f"));
   const t = el("div");
   t.append(el("b", null, who), el("span", "sc", score ? `score ${score}` : "—"));
   if (r) t.append(el("div", "sc", r[8].slice(0, 7)));
@@ -152,8 +132,8 @@ function show(i, keepCard) {
   $("#allAccept").disabled = g.s === "—";
   const box = $("#cards"); box.replaceChildren();
   g.cards.forEach((c, k) => {
-    const node = el("div", "card" + (k === card ? " cur" : ""));
-    node.append(crop(c.face, 128, "main"));
+    const node = el("div", "card2" + (k === card ? " cur" : ""));
+    node.append(crop(c.face, 128));
     const refs = el("div", "refs");
     if (c.aName) refs.append(refRow(c.aRef, c.aName + " (tagged)", c.aScore, false));
     if (c.sName) refs.append(refRow(c.sRef, c.sName, c.sScore, true));
@@ -191,12 +171,11 @@ function move(d) {
   nodes[card]?.scrollIntoView({ block: "nearest" });
 }
 
-function save() {
+function save(now) {
   clearTimeout(timer);
-  timer = setTimeout(async () => {
-    const r = await fetch("/audit/state/decisions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(dec) });
-    if (!r.ok) $("#status").textContent = "⚠ save failed";
-  }, 300);
+  const doSave = () => { timer = null; return post("/audit/state/decisions", dec).catch(e => $("#status").textContent = "⚠ save failed: " + e.message); };
+  if (now) return doSave();
+  timer = setTimeout(doSave, 300);
 }
 
 const all = action => GROUPS[cur].cards.forEach((_, k) => decide(action, k));
@@ -214,22 +193,29 @@ document.addEventListener("keydown", e => {
   else if (k === "j") show(cur + 1);
   else if (k === "k") show(cur - 1);
 });
+window.addEventListener("beforeunload", () => { if (timer) save(true); });
+$("#next").onclick = async () => { await save(true); location.href = "/apply"; };
 $("#score").onclick = async () => {
-  const b = $("#score"); b.disabled = true; $("#scoreMsg").textContent = "scoring every face…";
-  const r = await fetch("/audit/score", { method: "POST" });
-  if (r.ok) location.reload();
-  else { $("#scoreMsg").textContent = "⚠ " + (await r.json()).error; b.disabled = false; }
+  const b = $("#score"); b.disabled = true;
+  try {
+    await save(true);
+    const j = await runJob("score", {}, j => $("#scoreMsg").textContent = "scoring… " + (j.log.at(-1) || ""));
+    if (j.state === "done") location.reload();
+    else { $("#scoreMsg").textContent = "⚠ " + j.error; b.disabled = false; }
+  } catch (e) { $("#scoreMsg").textContent = "⚠ " + e.message; b.disabled = false; }
 };
 
 (async () => {
-  immich = (await (await fetch("/audit/config")).json()).immich;
-  dec = await (await fetch("/audit/state/decisions")).json();
-  GROUPS = await (await fetch("/audit/flags")).json();
+  const s = await steps("flags");
+  immich = (await get("/audit/config")).immich;
+  dec = await get("/audit/state/decisions");
+  GROUPS = await get("/audit/flags");
   if (!GROUPS) {
     GROUPS = [];
-    $("#cards").replaceChildren(el("div", "empty", "No flags yet: validate the references, then press “Compute flags”."));
+    $("#cards").replaceChildren(el("div", "empty", "No flags yet: validate the references (step 3), then press “Compute flags”."));
     return;
   }
+  if (s.flagsStale) $("#cards").before(el("div", "banner", "The references changed since these flags were computed: press “Recompute flags”. Your decisions are kept."));
   show(0);
 })();
 </script>

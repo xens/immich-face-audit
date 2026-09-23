@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Face audit · apply</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  .list { display:grid; grid-template-columns:repeat(auto-fill, minmax(230px, 1fr)); gap:8px; margin-top:10px; }
+  .item { display:grid; grid-template-columns:56px 1fr; gap:8px; align-items:center; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:6px; font-size:12px; }
+  .item b { display:block; font-size:13px; }
+  .item a { font-size:11px; }
+  .acc b span { color:var(--ok); } .rem b span { color:var(--warn); }
+  details { margin-top:8px; } summary { cursor:pointer; color:var(--muted); }
+</style>
+</head>
+<body>
+<nav id="steps"></nav>
+<div class="page">
+  <h1>Apply to Immich</h1>
+  <p class="help">Only faces you marked <b>→ suggestion</b> or <b>remove</b> change. Each face is read back from Immich first
+    and skipped if it changed since you reviewed it; every change is logged in this folder so it can be undone.</p>
+
+  <div class="card">
+    <div class="stats" id="stats"></div>
+    <div class="row" id="actions"></div>
+    <div id="notes"></div>
+  </div>
+
+  <div class="card" id="jobCard" hidden><h2 id="jobTitle"></h2><div id="job"></div><div class="stats" id="result"></div></div>
+
+  <div class="card"><h2 id="pendingTitle">Will change</h2><div class="list" id="pending"></div><div id="more"></div></div>
+
+  <div class="card">
+    <h2>Applied from this folder</h2>
+    <p class="help" id="undoHelp"></p>
+    <div class="row"><button id="undo" class="danger">Undo all…</button></div>
+    <details><summary>Most recent changes</summary><div class="list" id="recent"></div></details>
+  </div>
+</div>
+<script src="/static/app.js"></script>
+<script>
+const { el, get, steps, runJob, follow, jobPanel, crop } = FA;
+let immich = "";
+
+function item(r, cls) {
+  const x = el("div", "item " + cls);
+  x.append(r.geometry ? crop(r.geometry, 56) : el("div", "f"));
+  const t = el("div"), b = el("b", null, (r.fromName || "unnamed") + " ");
+  b.append(el("span", null, r.action === "unassign" ? "→ removed" : "→ " + (r.toName || "?")));
+  const a = el("a", null, "open in Immich"); a.href = `${immich}/photos/${r.asset}`; a.target = "_blank";
+  t.append(b, el("div", "help", r.reason || ""), a);
+  x.append(t);
+  return x;
+}
+
+async function refresh() {
+  const s = await steps("apply");
+  immich = (await get("/audit/config")).immich;
+  const p = await get("/audit/apply-preview");
+  const todo = p.pending.length + p.unknown.length;
+  const acc = p.pending.filter(r => r.action === "accept").length;
+  const st = document.getElementById("stats"); st.replaceChildren();
+  [["to apply", todo], ["reassign", acc], ["remove", p.pending.length - acc], ["already done", p.done.length],
+   ["no longer on the reviewed person", p.changed.length]].forEach(([k, v]) => {
+    const d = el("div"); d.append(el("b", null, v.toLocaleString()), el("span", null, k)); st.append(d);
+  });
+
+  const act = document.getElementById("actions"); act.replaceChildren();
+  const one = el("button", null, "Apply 1 as a test"), all = el("button", "primary", `Apply ${todo.toLocaleString()} changes…`);
+  one.disabled = all.disabled = !todo || !s.connected;
+  one.onclick = () => go("apply", { limit: 1 }, "Applying one face…");
+  all.onclick = () => confirm(`Change ${todo} faces in Immich?\n\nEach one is re-checked first, and everything can be undone from this page.`)
+                      && go("apply", {}, `Applying ${todo} changes…`);
+  act.append(one, all);
+
+  const notes = document.getElementById("notes"); notes.replaceChildren();
+  if (!s.data) notes.append(el("div", "banner", "No extracted data: the preview can't tell what is already done."));
+  if (p.done.length) notes.append(el("div", "help", `${p.done.length} decisions are already in Immich (applied earlier, or from another folder): nothing to do for them.`));
+  if (p.changed.length) notes.append(el("div", "help", `${p.changed.length} faces are no longer on the person you reviewed: already removed earlier (a removed face moves to a new unnamed person), or changed in Immich since. Left alone.`));
+  if (p.unknown.length) notes.append(el("div", "help", `${p.unknown.length} faces aren't in the extracted data; they will be checked live.`));
+
+  document.getElementById("pendingTitle").textContent = todo ? `Will change (${todo})` : "Nothing to apply";
+  const list = document.getElementById("pending"); list.replaceChildren();
+  const rows = p.pending.concat(p.unknown);
+  rows.slice(0, 200).forEach(r => list.append(item(r, r.action === "accept" ? "acc" : "rem")));
+  document.getElementById("more").replaceChildren(rows.length > 200 ? el("div", "help", `…and ${rows.length - 200} more`) : "");
+  if (!todo) list.append(el("div", "help", "Decide on flags in step 4 first (y = suggestion, u = remove)."));
+
+  document.getElementById("undoHelp").textContent = p.undoable
+    ? `${p.undoable} changes recorded. Undo puts each face back on the person it had before (a face that had no person gets a new unnamed one).`
+    : "Nothing applied from this folder yet.";
+  document.getElementById("undo").disabled = !p.undoable || !s.connected;
+  const rec = document.getElementById("recent"); rec.replaceChildren();
+  p.recent.forEach(r => rec.append(item({ ...r, action: r.toName ? "accept" : "unassign" }, r.toName ? "acc" : "rem")));
+
+  if (s.job && s.job.state === "running" && ["apply", "undo"].includes(s.job.kind)) watch(null, s.job.kind === "undo" ? "Undoing…" : "Applying…");
+}
+
+async function watch(start, title) {
+  const card = document.getElementById("jobCard"); card.hidden = false;
+  document.getElementById("jobTitle").textContent = title;
+  document.getElementById("result").replaceChildren();
+  const update = jobPanel(document.getElementById("job"));
+  document.querySelectorAll("button").forEach(b => b.disabled = true);
+  try {
+    const j = start ? await runJob(start.kind, start.body, update) : await follow(update);
+    document.getElementById("jobTitle").textContent = j.state === "done" ? "Finished" : "Stopped with an error";
+    if (j.result) {
+      const r = document.getElementById("result");
+      [["written", j.result.done], ["skipped (changed)", j.result.skipped], ["failed", j.result.failed]].forEach(([k, v]) => {
+        const d = el("div"); d.append(el("b", null, v), el("span", null, k)); r.append(d);
+      });
+    }
+  } catch (e) { document.getElementById("jobTitle").textContent = "⚠ " + e.message; }
+  refresh();
+}
+const go = (kind, body, title) => watch({ kind, body }, title);
+
+document.getElementById("undo").onclick = async () => {
+  const n = (await get("/audit/apply-preview")).undoable;
+  if (confirm(`Undo all ${n} changes applied from this folder?`)) go("undo", {}, `Undoing ${n} changes…`);
+};
+refresh();
+</script>
+</body>
+</html>
