@@ -1,0 +1,15 @@
+# Audit data: face embeddings are biometric data, and names are personal. Never commit.
+face-audit-data/
+*.sql
+*.sql.gz
+*.npy
+*.tsv
+.env
+
+__pycache__/
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/

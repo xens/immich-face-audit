@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "immich-face-audit"
+version = "0.1.0"
+description = "Find and fix misassigned faces in an Immich photo library, using the embeddings Immich already computed"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+immich-face-audit = "immich_face_audit.cli:main"
+
+[tool.setuptools]
+packages = ["immich_face_audit", "immich_face_audit.static"]
+
+[tool.setuptools.package-data]
+"immich_face_audit.static" = ["*.html"]
