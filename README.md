@@ -10,6 +10,20 @@ written to Immich until you run `apply --write`, and everything it writes can be
 
 On a 117k-face library it extracts in about 30 s, builds references in about 5 s and scores every face in about 15 s.
 
+```mermaid
+flowchart TD
+    DB[("Immich<br/>nightly DB backup")] -->|"extract --latest-backup<br/>(or extract FILE)"| X["faces · embeddings · people"]
+    API(["Immich API"]) -.->|"live names, birth dates"| X
+    X -->|baseline| R["reference faces per person × 3-year window"]
+    subgraph app ["review — local web app"]
+        direction LR
+        V{{"1 · validate<br/>references"}} -->|"Compute flags"| F["flagged faces"] --> D{{"2 · decide<br/>y / n / u"}}
+    end
+    R --> app
+    app -->|"apply (dry run)<br/>then apply --write"| W(["Immich API<br/>faces reassigned, logged"])
+    W -.->|"undo --write"| W
+```
+
 ## Why periods matter
 
 Immich assigns a new face to the person whose *nearest* stored face is closest. For look-alike
