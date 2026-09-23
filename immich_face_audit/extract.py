@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import csv
 import gzip
+import io
 import re
 import sys
 from pathlib import Path
@@ -55,42 +56,59 @@ def _visible_asset(r: dict) -> bool:
 
 
 def extract(dump: Path, wd: Workdir, log=print) -> dict:
+    """Extract from a local backup file (.sql.gz or plain .sql)."""
+    opener = gzip.open if dump.suffix == ".gz" else open
+    with opener(dump, "rt", encoding="utf-8") as fh:
+        return extract_lines(fh, wd, log)
+
+
+def extract_from_immich(immich: Immich, wd: Workdir, log=print) -> dict:
+    """Stream the newest server-side backup straight into the extractor;
+    nothing is written to disk except the extracted tables."""
+    b = immich.latest_backup()
+    log(f"downloading {b['filename']} ({b['filesize'] / 2**20:.0f} MB) from Immich ...")
+    with immich.download_backup(b["filename"]) as resp:
+        with io.TextIOWrapper(gzip.GzipFile(fileobj=resp), encoding="utf-8") as fh:
+            stats = extract_lines(fh, wd, log)
+    return {"backup": b["filename"], **stats}
+
+
+def extract_lines(fh, wd: Workdir, log=print) -> dict:
+    """Parse a pg_dump text stream (an iterable of lines)."""
     assets: dict[str, tuple[str, str]] = {}
     faces: dict[str, list] = {}
     people: dict[str, list] = {}
     emb_ids: list[str] = []
     embs: list[np.ndarray] = []
 
-    opener = gzip.open if dump.suffix == ".gz" else open
-    with opener(dump, "rt", encoding="utf-8") as fh:
-        for line in fh:
-            m = COPY_RE.match(line.rstrip("\n"))
-            if not m or m.group(1) not in TABLES:
-                continue
-            kind = TABLES[m.group(1)]
-            cols = [c.strip().strip('"') for c in m.group(2).split(",")]
-            log(f"reading {m.group(1)} ...")
-            for r in _rows(fh, cols):
-                if kind == "asset":
-                    if _visible_asset(r):
-                        assets[r["id"]] = (r["ownerId"], r.get("localDateTime") or r["fileCreatedAt"])
-                elif kind == "face":
-                    if r.get("deletedAt") or r.get("isVisible") == "f" or r["assetId"] not in assets:
-                        continue
-                    owner, taken = assets[r["assetId"]]
-                    person = r.get("personGroupId", r.get("personId")) or ""
-                    faces[r["id"]] = [r["id"], r["assetId"], person, owner, taken, r.get("sourceType", ""),
-                                      r["imageWidth"], r["imageHeight"], r["boundingBoxX1"],
-                                      r["boundingBoxY1"], r["boundingBoxX2"], r["boundingBoxY2"]]
-                elif kind == "embedding":
-                    if r["faceId"] in faces:
-                        emb_ids.append(r["faceId"])
-                        embs.append(np.array(r["embedding"][1:-1].split(","), dtype=np.float32))
-                elif kind == "person":
-                    pid = r.get("personGroupId") or r["id"]
-                    # multi-user v3 libraries have one row per owner; keep a named one
-                    if pid not in people or (r["name"] and not people[pid][1]):
-                        people[pid] = [pid, r["name"] or "", r.get("birthDate") or "", r.get("isHidden", "f")]
+    for line in fh:
+        m = COPY_RE.match(line.rstrip("\n"))
+        if not m or m.group(1) not in TABLES:
+            continue
+        kind = TABLES[m.group(1)]
+        cols = [c.strip().strip('"') for c in m.group(2).split(",")]
+        log(f"reading {m.group(1)} ...")
+        for r in _rows(fh, cols):
+            if kind == "asset":
+                if _visible_asset(r):
+                    assets[r["id"]] = (r["ownerId"], r.get("localDateTime") or r["fileCreatedAt"])
+            elif kind == "face":
+                if r.get("deletedAt") or r.get("isVisible") == "f" or r["assetId"] not in assets:
+                    continue
+                owner, taken = assets[r["assetId"]]
+                person = r.get("personGroupId", r.get("personId")) or ""
+                faces[r["id"]] = [r["id"], r["assetId"], person, owner, taken, r.get("sourceType", ""),
+                                  r["imageWidth"], r["imageHeight"], r["boundingBoxX1"],
+                                  r["boundingBoxY1"], r["boundingBoxX2"], r["boundingBoxY2"]]
+            elif kind == "embedding":
+                if r["faceId"] in faces:
+                    emb_ids.append(r["faceId"])
+                    embs.append(np.array(r["embedding"][1:-1].split(","), dtype=np.float32))
+            elif kind == "person":
+                pid = r.get("personGroupId") or r["id"]
+                # multi-user v3 libraries have one row per owner; keep a named one
+                if pid not in people or (r["name"] and not people[pid][1]):
+                    people[pid] = [pid, r["name"] or "", r.get("birthDate") or "", r.get("isHidden", "f")]
 
     if not embs:
         raise SystemExit("no face embeddings found: is this an Immich database dump?")

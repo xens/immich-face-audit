@@ -24,7 +24,7 @@ compared with the 2-year-old cousin of 2020, not with an older sibling's baby ph
 ## Workflow
 
 ```
-immich-face-audit extract immich-db-backup-XXXX.sql.gz   # ~30 s for 100k faces
+immich-face-audit extract --latest-backup               # or: extract immich-db-backup-XXXX.sql.gz
 immich-face-audit baseline                               # propose reference faces
 immich-face-audit review                                 # web app: validate, compute flags, decide
 immich-face-audit apply                                  # dry run
@@ -33,14 +33,22 @@ immich-face-audit apply --write                          # the rest
 immich-face-audit undo --write                           # if needed
 ```
 
-`immich-face-audit run DUMP` chains extract, baseline and review.
+`immich-face-audit run --latest-backup` (or `run DUMP`) chains extract, baseline and review.
 
 ### 1. Extract
 
+The face embeddings are not available through Immich's API; they only exist in the database. But
 Immich writes a nightly database backup (`UPLOAD_LOCATION/backups/immich-db-backup-*.sql.gz`, see
-*Administration → Settings → Backup*). `extract` streams that file and keeps four tables: assets, faces,
-face embeddings and people. It never restores Postgres and never reads anything else. User accounts
-and credentials in the dump are skipped.
+*Administration → Settings → Backup*), and `extract` reads that. It streams the file and keeps four tables:
+assets, faces, face embeddings and people. It never restores Postgres and never reads anything else.
+User accounts and credentials in the dump are skipped.
+
+Two ways to get the backup:
+
+- `extract --latest-backup` asks the Immich API for its newest backup and streams it straight into the
+  parser, so it's never written to disk. This needs a key from an **admin** account with `maintenance` and
+  `backup.download`, which is a powerful key: see [API keys](#api-keys).
+- `extract path/to/immich-db-backup-….sql.gz` uses a copy you took from the backups folder yourself.
 
 If `IMMICH_URL` and `IMMICH_API_KEY` are set, names, birth dates and hidden flags are then refreshed from
 the live API, so edits you make in Immich after the dump are picked up.
@@ -108,17 +116,24 @@ Configuration goes in environment variables or a `.env` file, in the current dir
 ```
 IMMICH_URL=http://192.168.1.10:2283
 IMMICH_API_KEY=...
+# only for `extract --latest-backup`:
+IMMICH_BACKUP_API_KEY=...
 ```
 
-API key permissions (Immich → Account Settings → API Keys):
+### API keys
 
-| Step | Permissions |
-|---|---|
-| `extract` (optional name refresh) | `person.read` |
-| `review` | `asset.view` |
-| `apply` / `undo` | `asset.view`, `face.read`, `face.update`, `person.read`, `person.create` |
+Create them under Immich → Account Settings → API Keys, with only these permissions:
 
-Use a key with only these permissions, and revoke it when you're done.
+| Key | Used by | Permissions |
+|---|---|---|
+| `IMMICH_API_KEY` | `extract` (name refresh) | `person.read` |
+| | `review` | `asset.view` |
+| | `apply` / `undo` | `asset.view`, `face.read`, `face.update`, `person.read`, `person.create` |
+| `IMMICH_BACKUP_API_KEY` | `extract --latest-backup` | `maintenance`, `backup.download` (admin account) |
+
+**The backup key can download your entire database**, including every user's email and password hash.
+Keep it separate from the everyday key, create it only when you need it, and revoke it afterwards. If
+`IMMICH_BACKUP_API_KEY` is not set, `--latest-backup` falls back to `IMMICH_API_KEY`.
 
 ## Privacy
 

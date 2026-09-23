@@ -1,13 +1,13 @@
 """immich-face-audit: find and fix misassigned faces in Immich.
 
-    immich-face-audit extract immich-db-backup-XXXX.sql.gz
+    immich-face-audit extract immich-db-backup-XXXX.sql.gz   (or: extract --latest-backup)
     immich-face-audit baseline
     immich-face-audit review          # validate references, compute flags, decide
     immich-face-audit apply           # dry run
     immich-face-audit apply --write
     immich-face-audit undo --write
 
-`run DUMP` chains extract + baseline + review.
+`run DUMP` (or `run --latest-backup`) chains extract + baseline + review.
 """
 from __future__ import annotations
 
@@ -26,9 +26,22 @@ def _print(d: dict) -> None:
         print(f"  {k}: {v}")
 
 
+def _backup_client() -> Immich:
+    """Backup downloads need an admin key with `maintenance` + `backup.download`.
+    Prefer a dedicated IMMICH_BACKUP_API_KEY so the everyday key can stay narrow."""
+    if os.environ.get("IMMICH_BACKUP_API_KEY"):
+        return Immich.from_env(key_var="IMMICH_BACKUP_API_KEY")
+    return Immich.from_env()
+
+
 def cmd_extract(wd: Workdir, args) -> None:
-    print(f"extracting from {args.dump} ...")
-    _print(extract.extract(Path(args.dump), wd))
+    if bool(args.dump) == bool(args.latest_backup):
+        raise SystemExit("give either a backup file or --latest-backup")
+    if args.latest_backup:
+        _print(extract.extract_from_immich(_backup_client(), wd))
+    else:
+        print(f"extracting from {args.dump} ...")
+        _print(extract.extract(Path(args.dump), wd))
     immich = Immich.from_env(required=False)
     if immich:
         print("refreshing names / birth dates from the Immich API ...")
@@ -74,8 +87,12 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--port", type=int, default=8091)
         p.add_argument("--no-browser", action="store_true")
 
-    p = sub.add_parser("extract", help="read faces/embeddings/people from an Immich DB backup")
-    p.add_argument("dump")
+    def source_opts(p):
+        p.add_argument("dump", nargs="?", help="local immich-db-backup-*.sql.gz")
+        p.add_argument("--latest-backup", action="store_true",
+                       help="stream the newest backup from the Immich server instead of a local file")
+
+    source_opts(sub.add_parser("extract", help="read faces/embeddings/people from an Immich DB backup"))
     sub.add_parser("baseline", help="propose reference faces per person and period")
     sub.add_parser("score", help="flag suspicious faces (also available from the review app)")
     review_opts(sub.add_parser("review", help="open the review web app"))
@@ -85,7 +102,7 @@ def main(argv: list[str] | None = None) -> None:
         p.add_argument("--limit", type=int, default=0)
         p.add_argument("--faces", default="", help="comma-separated face ids to restrict to")
     p = sub.add_parser("run", help="extract + baseline + review")
-    p.add_argument("dump")
+    source_opts(p)
     review_opts(p)
 
     args = ap.parse_args(argv)

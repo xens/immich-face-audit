@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,12 +63,12 @@ class Immich:
         self.key = key
 
     @classmethod
-    def from_env(cls, required: bool = True) -> "Immich | None":
-        url, key = os.environ.get("IMMICH_URL", ""), os.environ.get("IMMICH_API_KEY", "")
+    def from_env(cls, required: bool = True, key_var: str = "IMMICH_API_KEY") -> "Immich | None":
+        url, key = os.environ.get("IMMICH_URL", ""), os.environ.get(key_var, "")
         if url and key:
             return cls(url, key)
         if required:
-            raise SystemExit("IMMICH_URL and IMMICH_API_KEY must be set (environment or .env)")
+            raise SystemExit(f"IMMICH_URL and {key_var} must be set (environment or .env)")
         return None
 
     def request(self, method: str, path: str, body: dict | None = None) -> tuple[bytes, str]:
@@ -82,6 +84,28 @@ class Immich:
     def call(self, method: str, path: str, body: dict | None = None):
         raw, _ = self.request(method, path, body)
         return json.loads(raw) if raw else None
+
+    def open_stream(self, path: str):
+        """Binary response for a large download; the caller closes it."""
+        req = urllib.request.Request(self.base + path, headers={"x-api-key": self.key})
+        try:
+            return urllib.request.urlopen(req, timeout=300)
+        except urllib.error.HTTPError as e:
+            raise ImmichError(f"GET {path}: HTTP {e.code} {e.read().decode(errors='replace')[:200]}") from e
+
+    def latest_backup(self) -> dict:
+        """Newest database backup, by the timestamp Immich puts in the filename
+        (immich-db-backup-YYYYMMDDTHHMMSS-...). Needs an admin key with `maintenance`."""
+        backups = self.call("GET", "/api/admin/database-backups")["backups"]
+        dated = [(m.group(1), b) for b in backups
+                 if (m := re.search(r"(\d{8}T\d{6})", b["filename"])) and b["filename"].endswith(".sql.gz")]
+        if not dated:
+            raise ImmichError(f"no dated .sql.gz database backup on the server ({len(backups)} listed)")
+        return max(dated, key=lambda x: x[0])[1]
+
+    def download_backup(self, filename: str):
+        """Stream of the gzipped backup. Needs `backup.download`."""
+        return self.open_stream(f"/api/admin/database-backups/{urllib.parse.quote(filename)}")
 
     def people(self) -> list[dict]:
         out, page = [], 1
