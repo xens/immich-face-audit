@@ -9,6 +9,7 @@ from __future__ import annotations
 import http.server
 import json
 import re
+import sys
 import threading
 import traceback
 import webbrowser
@@ -17,6 +18,7 @@ from importlib import resources
 from . import baseline, score
 from .config import Immich, ImmichError, Workdir
 
+CLIENT_GONE = (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)
 THUMB = re.compile(r"^/api/assets/[0-9a-f-]{36}/thumbnail\?size=(thumbnail|preview)$")
 PAGES = {"/": "references.html", "/references": "references.html", "/flags": "flags.html"}
 
@@ -72,13 +74,23 @@ def serve(wd: Workdir, immich: Immich, port: int = 8091, open_browser: bool = Tr
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", cache)
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except CLIENT_GONE:
+                pass  # the browser cancelled it (lazy images scrolled away, page switched)
 
         def log_message(self, fmt, *a):
             if a and not str(a[1]).startswith(("2", "3")):
                 print(" ", *a)
 
-    server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    class Server(http.server.ThreadingHTTPServer):
+        daemon_threads = True
+
+        def handle_error(self, request, client_address):
+            if not isinstance(sys.exc_info()[1], CLIENT_GONE):
+                super().handle_error(request, client_address)
+
+    server = Server(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
     print(f"review app: {url}   (Ctrl-C to stop)")
     if open_browser:

@@ -227,3 +227,41 @@ def test_extract_streams_latest_backup_from_immich(library, tmp_path):
     assert stats["faces"] == 123 and stats["named"] == 3
     assert all(key == "backup-key" for _, key in seen)
     assert not list(tmp_path.glob("work/*.sql*"))  # streamed, never saved
+
+
+def test_review_app_ignores_cancelled_thumbnail_requests(tmp_path, capfd):
+    """Browsers cancel lazy image loads all the time; that must not print tracebacks."""
+    import socket
+    import threading
+    import time
+    import urllib.request
+
+    from immich_face_audit import review
+
+    class BigThumbs:
+        base = "http://immich.invalid"
+
+        def request(self, method, path):
+            return b"x" * 8_000_000, "image/jpeg"
+
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    threading.Thread(target=review.serve, args=(Workdir(tmp_path), BigThumbs(), port, False), daemon=True).start()
+    for _ in range(50):
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{port}/audit/config", timeout=1)
+            break
+        except OSError:
+            time.sleep(0.1)
+
+    path = "/api/assets/00000000-0000-0000-0000-000000000000/thumbnail?size=preview"
+    for _ in range(5):  # ask for a big image, then hang up without reading it
+        c = socket.create_connection(("127.0.0.1", port))
+        c.sendall(f"GET {path} HTTP/1.1\r\nHost: x\r\n\r\n".encode())
+        c.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, b"\x01\x00\x00\x00\x00\x00\x00\x00")
+        c.close()
+    time.sleep(1)
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}", timeout=5) as r:
+        assert len(r.read()) == 8_000_000  # still serving normally
+    assert "Traceback" not in capfd.readouterr().err
