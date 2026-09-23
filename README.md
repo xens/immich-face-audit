@@ -98,6 +98,19 @@ Everything you decide is saved as you go. You can stop and resume at any time.
 
 Running it again only does what's left. `undo --write` replays the log backwards.
 
+## Running it again later
+
+**Keep the same `--workdir` between audits.** Your decisions live there. On the next run, faces you
+already marked *keep* show up as decided, so you only review what is new, and the undo log keeps its
+full history. A second audit also finds more: every face you reassigned becomes a reference, so
+unnamed faces that used to be ambiguous now clearly match someone.
+
+```
+immich-face-audit --workdir ~/face-audit extract --latest-backup
+immich-face-audit --workdir ~/face-audit baseline
+immich-face-audit --workdir ~/face-audit review
+```
+
 ## Install
 
 Requires Python 3.10+ and numpy.
